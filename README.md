@@ -43,7 +43,7 @@ Clawdbot 是一个开源的本地 AI 助手枢纽，它允许你将最顶尖的 
 
 <div align="center">
   <img src="./images/launcher-preview.png" width="700" alt="Clawdbot Launcher 界面预览" style="border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); margin: 20px 0;">
-  <p><em>▲ 全新 v2.0 界面：支持状态灯监控、彩色日志与托盘守护</em></p>
+  <p><em>▲ 全新界面：支持状态灯监控、彩色日志与托盘守护</em></p>
 </div>
 
 ### 🎉 核心亮点 (Highlights)
