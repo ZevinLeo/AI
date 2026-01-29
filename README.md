@@ -27,8 +27,7 @@ Clawdbot 是一个开源的本地 AI 助手枢纽，它允许你将最顶尖的 
 ## <span id="requirements">二、 系统要求</span>
 
 * **Node.js**: **22.0.0** 或更高版本 (强烈推荐使用 `nvm` 管理)
-* **操作系统**: Windows / macOS / Linux
-* **Launcher 依赖**: Python 3.8+ (需安装 `pip install sv-ttk pystray pillow`)
+* **操作系统**: Windows
 
 ---
 
