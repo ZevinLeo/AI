@@ -8,7 +8,9 @@ import ctypes
 import os
 import json
 import traceback
-import re  # 必须保留
+import re
+import urllib.request 
+import webbrowser
 
 # ==========================================
 # 0. 崩溃拦截与环境配置
@@ -26,7 +28,6 @@ try:
 
     import sv_ttk
     import pystray
-    # 修改点1：增加 ImageTk 引用
     from PIL import Image, ImageDraw, ImageFont, ImageTk
 except Exception as e:
     show_critical_error(f"依赖库加载失败:\n{str(e)}\n\n请确保安装了: pip install sv-ttk pystray pillow")
@@ -68,11 +69,10 @@ def save_config(config_data):
     except: pass
 
 # ==========================================
-# 3. 原生画布状态灯
+# 3. 状态灯组件
 # ==========================================
 class StatusLight(tk.Canvas):
     def __init__(self, parent, size=14):
-        # 居中放置 Canvas，本身无边框
         super().__init__(parent, width=size, height=size, highlightthickness=0, borderwidth=0)
         self.indicator = self.create_oval(1, 1, size-1, size-1, fill="#adb5bd", outline="")
     
@@ -80,34 +80,36 @@ class StatusLight(tk.Canvas):
         self.itemconfig(self.indicator, fill=color)
 
 # ==========================================
-# 4. 日志组件 (已修改：移除横向滚动，改为自适应换行，去除点击聚焦虚线)
+# 4. 日志组件 (带背景色)
 # ==========================================
 class ModernLog(ttk.Frame):
     def __init__(self, parent, **kwargs):
         super().__init__(parent)
         self.pack(fill="both", expand=True)
-        
-        # 仅保留垂直滚动条
         self.v_scroll = ttk.Scrollbar(self, orient="vertical")
         self.v_scroll.pack(side="right", fill="y")
         
-        self.text = tk.Text(self, 
-                            yscrollcommand=self.v_scroll.set, 
-                            wrap="word", 
-                            font=("Consolas", 10), 
-                            padx=10, pady=10, 
-                            borderwidth=0, 
-                            highlightthickness=0, 
-                            takefocus=0,  # 核心修改：禁止文本框获取焦点环
-                            **kwargs)
+        # 修改点 1：设置浅灰色背景 (#f4f4f4)
+        self.text = tk.Text(
+            self, 
+            yscrollcommand=self.v_scroll.set, 
+            wrap="word", 
+            font=("Consolas", 10), 
+            padx=10, pady=10, 
+            borderwidth=0, 
+            highlightthickness=0, 
+            takefocus=0, 
+            bg="#f4f4f4",  # <--- 浅灰色背景
+            fg="#333333",  # 深灰色文字
+            **kwargs
+        )
         self.text.pack(side="left", fill="both", expand=True)
-        
         self.v_scroll.config(command=self.text.yview)
         
         self.text.tag_config('INFO', foreground='')
-        self.text.tag_config('ERROR', foreground='#e03131')
-        self.text.tag_config('SUCCESS', foreground='#2f9e44')
-        self.text.tag_config('CMD', foreground='#1971c2')
+        self.text.tag_config('ERROR', foreground='#d32f2f') # 深红
+        self.text.tag_config('SUCCESS', foreground='#2e7d32') # 深绿
+        self.text.tag_config('CMD', foreground='#1565c0') # 深蓝
 
     def insert(self, *args):
         try:
@@ -127,17 +129,13 @@ class ClawdLauncher:
     def __init__(self, root):
         self.root = root
         self.root.title("Clawdbot 启动器")
-        self.root.geometry("1200x900") 
-        self.root.minsize(1200, 900)
+        self.root.geometry("1000x700")
+        self.root.minsize(800, 600)
         
         self.config = load_config()
-        
-        # 强制浅色主题
-        try:
-            sv_ttk.set_theme("light")
+        try: sv_ttk.set_theme("light")
         except: pass
 
-        # 修改点2：设置主窗口图标
         try:
             icon_img = self.create_tray_image()
             self.icon_photo = ImageTk.PhotoImage(icon_img)
@@ -150,28 +148,23 @@ class ClawdLauncher:
         self.node_connected_flag = False
         self.is_quitting = False 
         self.programmatic_action = False
-
         self.is_resizing = False
         self._resize_timer = None
 
         # --- 字体定义 ---
         self.f_title = ("Microsoft YaHei UI", 12, "bold") 
         self.f_body = ("Microsoft YaHei UI", 11)          
+        # 统一的小字号，用于状态灯文字和托盘复选框
         self.f_small = ("Microsoft YaHei UI", 10)         
         self.f_emoji = ("Segoe UI Emoji", 14)
 
-        # 状态变量
         self.status_gw_text = tk.StringVar(value="未运行")
         self.status_node_text = tk.StringVar(value="未运行")
-        
-        self.ui_cache = {
-            "gw_color": "#adb5bd", "gw_style": "StatusRed.TLabel",
-            "node_color": "#adb5bd", "node_style": "StatusRed.TLabel"
-        }
+        self.ui_cache = {"gw_color": "#adb5bd", "gw_style": "StatusRed.TLabel", "node_color": "#adb5bd", "node_style": "StatusRed.TLabel"}
 
         self.apply_styles()
 
-        # 布局
+        # UI 布局
         self.top_frame = ttk.Frame(root, padding=25)
         self.top_frame.pack(side=tk.TOP, fill=tk.X)
         self.setup_dashboard(self.top_frame)
@@ -179,24 +172,13 @@ class ClawdLauncher:
         self.bottom_frame = ttk.Frame(root, padding=(25, 0, 25, 25))
         self.bottom_frame.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
 
-        # 核心修改点：Notebook 不获取焦点
-        self.notebook = ttk.Notebook(self.bottom_frame, takefocus=False)
-        self.notebook.pack(fill="both", expand=True)
+        # 日志标题 (恢复正常样式)
+        lbl_log = ttk.Label(self.bottom_frame, text="运行日志", font=("Microsoft YaHei UI", 10, "bold"))
+        lbl_log.pack(anchor="w", pady=(0, 5))
+        
+        self.txt_system = ModernLog(self.bottom_frame)
 
-        self.tab_gateway_log = ttk.Frame(self.notebook)
-        self.tab_node_log = ttk.Frame(self.notebook)
-        self.tab_system_log = ttk.Frame(self.notebook)
-
-        self.notebook.add(self.tab_gateway_log, text=" Gateway ")
-        self.notebook.add(self.tab_node_log, text=" Node ")
-        self.notebook.add(self.tab_system_log, text=" System ")
-
-        self.txt_gateway = ModernLog(self.tab_gateway_log)
-        self.txt_node = ModernLog(self.tab_node_log)
-        self.txt_system = ModernLog(self.tab_system_log)
-
-        try:
-            self.setup_tray_icon()
+        try: self.setup_tray_icon()
         except: pass
         
         self.monitor_thread = threading.Thread(target=self.monitor_loop, daemon=True)
@@ -212,71 +194,73 @@ class ClawdLauncher:
         style.configure("TButton", font=self.f_body)
         style.configure("Accent.TButton", font=self.f_body)
         style.configure("TLabelframe.Label", font=self.f_small, foreground="#0078d4")
-        style.configure("TNotebook.Tab", padding=[20, 3], font=self.f_small)
-        style.configure("TCheckbutton", font=self.f_small)
+        
+        # 修改点 2：托盘复选框样式，显式指定字体为 self.f_small (10号)
+        style.configure("Tray.TCheckbutton", font=self.f_small)
         
         style.configure("Title.TLabel", font=self.f_title)
+        
+        # 状态灯文字样式，同样使用 self.f_small
         style.configure("StatusGreen.TLabel", foreground="#2f9e44", font=self.f_small)
         style.configure("StatusRed.TLabel", foreground="gray", font=self.f_small)
         style.configure("StatusYellow.TLabel", foreground="#f59f00", font=self.f_small)
         
         style.configure("Emoji.TLabel", font=self.f_emoji) 
-
-        style.configure("Stop.TButton", foreground="#d65745", font=self.f_body) 
-        style.configure("Check.TButton", foreground="#4c9e5f", font=self.f_body)
+        style.configure("Stop.TButton", foreground="#d65745", font=self.f_body)
+        style.configure("Link.TButton", foreground="#0078d4", font=self.f_body) 
 
     def setup_dashboard(self, parent):
         frame = ttk.LabelFrame(parent, text=" 控制面板 ", padding=20)
         frame.pack(fill="x", expand=True)
-
         self.var_minimize_tray = tk.BooleanVar(value=self.config.get("minimize_to_tray", False))
-
         frame.columnconfigure(4, weight=1) 
 
-        # --- Row 0: Gateway ---
+        # Gateway Row
         ttk.Label(frame, text="🧠", style="Emoji.TLabel").grid(row=0, column=0, padx=(5, 10), pady=8)
         ttk.Label(frame, text="Gateway", style="Title.TLabel").grid(row=0, column=1, sticky="w", padx=(0, 20), pady=8)
-        
         self.light_gw = StatusLight(frame, size=12)
         self.light_gw.grid(row=0, column=2, padx=(0, 10), pady=8)
-        
         self.lbl_gw_state = ttk.Label(frame, textvariable=self.status_gw_text, style="StatusRed.TLabel")
         self.lbl_gw_state.grid(row=0, column=3, sticky="w", pady=8)
 
-        # --- Row 1: Node ---
+        # Node Row
         ttk.Label(frame, text="💻", style="Emoji.TLabel").grid(row=1, column=0, padx=(5, 10), pady=8)
         ttk.Label(frame, text="Node", style="Title.TLabel").grid(row=1, column=1, sticky="w", padx=(0, 20), pady=8)
-        
         self.light_node = StatusLight(frame, size=12)
         self.light_node.grid(row=1, column=2, padx=(0, 10), pady=8)
-        
         self.lbl_node_state = ttk.Label(frame, textvariable=self.status_node_text, style="StatusRed.TLabel")
         self.lbl_node_state.grid(row=1, column=3, sticky="w", pady=8)
 
-        # --- Settings ---
-        cb_tray = ttk.Checkbutton(frame, text="最小化到托盘", variable=self.var_minimize_tray, command=self.save_tray_setting)
+        # Settings
+        # 应用 Tray.TCheckbutton 样式，确保和状态文字一样大
+        cb_tray = ttk.Checkbutton(
+            frame, 
+            text="最小化到托盘", 
+            variable=self.var_minimize_tray, 
+            command=self.save_tray_setting, 
+            style="Tray.TCheckbutton", 
+            takefocus=0
+        )
         cb_tray.grid(row=0, column=5, rowspan=2, sticky="e", padx=10)
 
-        # --- Buttons ---
+        # Buttons
         btn_frame = ttk.Frame(frame)
         btn_frame.grid(row=2, column=0, columnspan=6, pady=(25, 5), sticky="w")
-
         btn_width = 20
-        ttk.Button(btn_frame, text="🚀  一键启动", style="Accent.TButton", width=btn_width, command=self.start_services).pack(side="left", padx=(0, 10))
-        ttk.Button(btn_frame, text="🛑  全部停止", style="Stop.TButton", width=btn_width, command=self.stop_all).pack(side="left", padx=10)
+        
+        ttk.Button(btn_frame, text="🚀  一键启动", style="Accent.TButton", width=btn_width, takefocus=0, command=self.start_services).pack(side="left", padx=(0, 10))
+        ttk.Button(btn_frame, text="🛑  全部停止", style="Stop.TButton", width=btn_width, takefocus=0, command=lambda: threading.Thread(target=self.stop_all).start()).pack(side="left", padx=10)
+        ttk.Button(btn_frame, text="🌐  Web 控制台", style="Link.TButton", width=btn_width, takefocus=0, command=self.open_web_ui).pack(side="left", padx=10)
 
-    # --- Event Handlers ---
+    # --- 辅助函数 ---
     def on_resize_event(self, event):
         if event.widget == self.root:
             self.is_resizing = True
-            if self._resize_timer:
-                self.root.after_cancel(self._resize_timer)
+            if self._resize_timer: self.root.after_cancel(self._resize_timer)
             self._resize_timer = self.root.after(200, self._stop_resizing)
-
     def _stop_resizing(self):
         self.is_resizing = False
         self.root.after(0, self.update_ui_status)
-
     def sync_ui(self):
         if self.is_resizing: return
         c = self.ui_cache
@@ -284,40 +268,25 @@ class ClawdLauncher:
         self.lbl_gw_state.config(style=c["gw_style"])
         self.light_node.set_color(c["node_color"])
         self.lbl_node_state.config(style=c["node_style"])
-
     def update_ui_status(self):
-        # 1. Canvas
-        if self.status_gw_style == "StatusGreen.TLabel":
-            self.light_gw.set_color("#2f9e44")
-        else:
-            self.light_gw.set_color("#adb5bd")
-            
-        if self.status_node_style == "StatusGreen.TLabel":
-            self.light_node.set_color("#2f9e44")
-        elif self.status_node_style == "StatusYellow.TLabel":
-            self.light_node.set_color("#f59f00")
-        else:
-            self.light_node.set_color("#adb5bd")
-
-        # 2. Label
+        if self.status_gw_style == "StatusGreen.TLabel": self.light_gw.set_color("#2f9e44")
+        else: self.light_gw.set_color("#adb5bd")
+        if self.status_node_style == "StatusGreen.TLabel": self.light_node.set_color("#2f9e44")
+        elif self.status_node_style == "StatusYellow.TLabel": self.light_node.set_color("#f59f00")
+        else: self.light_node.set_color("#adb5bd")
         self.lbl_gw_state.config(style=self.status_gw_style)
         self.lbl_node_state.config(style=self.status_node_style)
-
     def save_tray_setting(self):
         self.config["minimize_to_tray"] = self.var_minimize_tray.get()
         save_config(self.config)
-
     def log(self, widget, msg, tag='INFO'):
         def _write():
             timestamp = time.strftime("%H:%M:%S", time.localtime())
             widget.insert(tk.END, f"[{timestamp}] {msg}\n", tag)
             widget.see(tk.END)
         self.root.after(0, _write)
-
     def on_close_click(self):
-        if messagebox.askyesno("退出确认", "确定要停止服务并退出程序吗？"):
-            self.quit_app()
-
+        if messagebox.askyesno("退出确认", "确定要停止服务并退出程序吗？"): self.quit_app()
     def on_minimize_event(self, event):
         if event.widget != self.root: return
         if self.programmatic_action: return
@@ -325,14 +294,12 @@ class ClawdLauncher:
             self.programmatic_action = True
             self.root.withdraw()
             self.programmatic_action = False
-
     def show_window(self, icon=None, item=None):
         self.programmatic_action = True
         self.root.deiconify()
         self.root.state('normal')
         self.root.lift()
         self.programmatic_action = False
-    
     def create_tray_image(self):
         w, h = 64, 64
         image = Image.new('RGBA', (w, h), (0, 0, 0, 0))
@@ -340,32 +307,34 @@ class ClawdLauncher:
         try:
             font = ImageFont.truetype("seguiemj.ttf", 48)
             dc.text((32, 32), "🦞", font=font, anchor="mm", fill="#ff4500")
-        except:
-            dc.ellipse((10, 10, 54, 54), fill="#ff4500", outline="white")
+        except: dc.ellipse((10, 10, 54, 54), fill="#ff4500", outline="white")
         return image
-
     def setup_tray_icon(self):
-        menu = (
-            pystray.MenuItem('显示主界面', self.show_window, default=True),
-            pystray.MenuItem('退出程序', self.quit_app)
-        )
+        menu = (pystray.MenuItem('显示主界面', self.show_window, default=True), pystray.MenuItem('退出程序', self.quit_app))
         self.icon = pystray.Icon("ClawdLauncher", self.create_tray_image(), "Clawdbot", menu)
         threading.Thread(target=self.icon.run, daemon=True).start()
-
     def quit_app(self, icon=None, item=None):
         self.is_quitting = True
-        self.stop_all()
+        self.root.withdraw()
         try: self.icon.stop() 
         except: pass
-        self.root.quit()
-        sys.exit()
+        self.stop_all(logging=False)
+        self.root.destroy()
+        sys.exit(0)
 
+    # ==========================================
+    #  后台静默执行
+    # ==========================================
     def run_process_in_background(self, cmd_str, process_attr, log_widget, success_trigger=None):
         try:
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             creation_flags = subprocess.CREATE_NO_WINDOW
-            process = subprocess.Popen(cmd_str, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace', startupinfo=startupinfo, creationflags=creation_flags, shell=True)
+            process = subprocess.Popen(
+                cmd_str, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
+                text=True, encoding='utf-8', errors='replace', 
+                startupinfo=startupinfo, creationflags=creation_flags, shell=True
+            )
             setattr(self, process_attr, process)
             self.log(log_widget, f"执行命令: {cmd_str}", 'CMD')
             for line in process.stdout:
@@ -376,69 +345,76 @@ class ClawdLauncher:
             self.log(log_widget, "进程已退出。", 'ERROR')
             setattr(self, process_attr, None)
             if process_attr == 'proc_gateway': self.gateway_ready = False
-        except Exception as e: self.log(log_widget, f"启动失败: {e}", 'ERROR')
+        except Exception as e: 
+            self.log(log_widget, f"启动失败: {e}", 'ERROR')
 
     # ==========================================
-    #  Gateway 检测与启动逻辑
+    #  业务逻辑区
     # ==========================================
-    def check_gateway_status(self):
+    def check_gateway_http(self):
         try:
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            # 静默执行 clawdbot gateway status
-            result = subprocess.run(
-                "clawdbot gateway status", 
-                capture_output=True, 
-                text=True, 
-                shell=True, 
-                encoding='utf-8', 
-                errors='replace', 
-                startupinfo=startupinfo, 
-                creationflags=subprocess.CREATE_NO_WINDOW
-            )
-            output = result.stdout + result.stderr
-            # 判定标准：包含 "RPC probe: ok" 或 "Listening:"
-            if "RPC probe: ok" in output or "Listening:" in output:
+            url = "http://127.0.0.1:18789/"
+            req = urllib.request.Request(url, method='GET')
+            with urllib.request.urlopen(req, timeout=0.5) as response:
                 return True
-            return False
+        except urllib.error.HTTPError:
+            return True 
         except:
             return False
 
+    def open_web_ui(self):
+        webbrowser.open("http://127.0.0.1:18789/")
+
+    def _start_node_internal(self):
+        if self.proc_node and self.proc_node.poll() is None:
+             self.log(self.txt_system, "Node 进程已在运行。", "INFO")
+             return
+
+        self.log(self.txt_system, "正在启动 Node...", "INFO")
+        node_cmd = 'clawdbot node run --host 127.0.0.1 --port 18789 --display-name "MyWinPC"'
+        
+        threading.Thread(
+            target=self.run_process_in_background, 
+            args=(node_cmd, "proc_node", self.txt_system, None), 
+            daemon=True
+        ).start()
+
     def start_services(self):
-        # 使用新的检测逻辑判断 Gateway 是否运行
-        if self.check_gateway_status():
-            self.log(self.txt_system, "Gateway 已在运行中。", "INFO")
+        if self.check_gateway_http():
+            self.log(self.txt_system, "Gateway 服务已就绪。", "INFO")
             self.gateway_ready = True
+            self._start_node_internal()
         else:
             self.gateway_ready = False
+            self.log(self.txt_system, "Gateway 未运行，正在启动...", "INFO")
+            
+            cmd = "clawdbot gateway"
             def gateway_trigger(line):
-                if "Ctrl+C to stop" in line:
-                    self.log(self.txt_gateway, ">>> Gateway 就绪 <<<", "SUCCESS")
+                if "Listening on" in line or "Ctrl+C to stop" in line:
+                    self.log(self.txt_system, ">>> Gateway 启动成功 <<<", "SUCCESS")
                     self.gateway_ready = True
-            threading.Thread(target=self.run_process_in_background, args=("clawdbot gateway", "proc_gateway", self.txt_gateway, gateway_trigger), daemon=True).start()
-        
-        self.node_connected_flag = False
-        delay = 5 
-        def start_node():
-            if delay: 
-                self.log(self.txt_node, f"等待 {delay} 秒...", "INFO")
-                time.sleep(delay)
-            threading.Thread(target=self.run_process_in_background, args=('clawdbot node run --host 127.0.0.1 --port 18789 --display-name "MyWinPC"', "proc_node", self.txt_node, None), daemon=True).start()
-        threading.Thread(target=start_node, daemon=True).start()
+                    self.root.after(50, self._start_node_internal)
 
-    def stop_all(self):
-        self.log(self.txt_system, "正在停止所有服务...", "INFO")
-        if self.proc_gateway: subprocess.run(f"taskkill /F /T /PID {self.proc_gateway.pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
-        if self.proc_node: subprocess.run(f"taskkill /F /T /PID {self.proc_node.pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
-        subprocess.run("taskkill /F /IM clawdbot.exe", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
-        subprocess.run("taskkill /F /IM node.exe", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
+            threading.Thread(
+                target=self.run_process_in_background, 
+                args=(cmd, "proc_gateway", self.txt_system, gateway_trigger), 
+                daemon=True
+            ).start()
+
+    def stop_all(self, logging=True):
+        if logging: self.log(self.txt_system, "正在停止所有服务...", "INFO")
+        kill_flags = subprocess.CREATE_NO_WINDOW
+        
+        if self.proc_gateway: subprocess.run(f"taskkill /F /T /PID {self.proc_gateway.pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=kill_flags)
+        if self.proc_node: subprocess.run(f"taskkill /F /T /PID {self.proc_node.pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=kill_flags)
+        
+        subprocess.run("taskkill /F /IM clawdbot.exe", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=kill_flags)
+        subprocess.run("taskkill /F /IM node.exe", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=kill_flags)
+        
         self.gateway_ready = False
         self.node_connected_flag = False
-        self.log(self.txt_system, "停止指令已发送。", "INFO")
+        if logging: self.log(self.txt_system, "已发送停止指令。", "INFO")
 
-    # ==========================================
-    #  Node 检测逻辑
-    # ==========================================
     def check_status_once(self, manual=False):
         try:
             startupinfo = subprocess.STARTUPINFO()
@@ -447,19 +423,13 @@ class ClawdLauncher:
             output = result.stdout
             if manual: self.log(self.txt_system, output)
             
-            # 判定标准：
-            # 1. Connected: [数字1-9] (原逻辑)
-            # 2. 表格中包含 "paired · connected" (新逻辑)
             is_connected = False
-            if re.search(r"Connected:\s*[1-9]", output):
-                is_connected = True
-            elif "paired · connected" in output:
-                is_connected = True
+            if re.search(r"Connected:\s*[1-9]", output): is_connected = True
+            elif "paired · connected" in output: is_connected = True
 
             if is_connected:
                 if not self.node_connected_flag:
-                    self.log(self.txt_node, ">>> 连接确认 (Node Connected) <<<", "SUCCESS")
-                    if not manual: self.log(self.txt_system, ">>> 自动检测：Node 已连接 <<<", "SUCCESS")
+                    self.log(self.txt_system, ">>> Node 连接成功 (Connected) <<<", "SUCCESS")
                 self.node_connected_flag = True
                 return True
             else:
@@ -474,56 +444,50 @@ class ClawdLauncher:
         while True:
             if self.is_quitting: break
             
-            # --- Logic ---
-            gw_text = "未运行"
-            gw_color = "#adb5bd"
-            gw_style = "StatusRed.TLabel"
-            
-            # 修改点：使用命令检测 Gateway
-            if self.check_gateway_status():
+            # 1. 检测 Gateway (HTTP)
+            if self.check_gateway_http():
                 gw_text = "运行中"
                 gw_color = "#2f9e44"
                 gw_style = "StatusGreen.TLabel"
                 self.gateway_ready = True
             else:
+                gw_text = "未运行"
+                gw_color = "#adb5bd"
+                gw_style = "StatusRed.TLabel"
                 self.gateway_ready = False
 
+            # 2. 检测 Node
             node_text = "未运行"
             node_color = "#adb5bd"
             node_style = "StatusRed.TLabel"
-            
-            # Node 状态逻辑保持微调，依赖 check_status_once 的更新
-            if self.proc_node and self.proc_node.poll() is None:
-                if self.node_connected_flag:
-                    node_text = "已连接"
-                    node_color = "#2f9e44"
-                    node_style = "StatusGreen.TLabel"
-                else:
-                    node_text = "连接中..."
-                    node_color = "#f59f00"
-                    node_style = "StatusYellow.TLabel"
-                    self.check_status_once(manual=False)
-            else:
-                self.node_connected_flag = False
 
-            # --- Update ---
+            if self.gateway_ready:
+                if self.proc_node and self.proc_node.poll() is None:
+                    if self.node_connected_flag:
+                        node_text = "已连接"
+                        node_color = "#2f9e44"
+                        node_style = "StatusGreen.TLabel"
+                    else:
+                        node_text = "连接中..."
+                        node_color = "#f59f00"
+                        node_style = "StatusYellow.TLabel"
+                        self.check_status_once(manual=False)
+                else:
+                    self.node_connected_flag = False
+
+            # --- 刷新 UI ---
             current_data = {
                 "gw_text": gw_text, "gw_color": gw_color, "gw_style": gw_style,
                 "node_text": node_text, "node_color": node_color, "node_style": node_style
             }
-            current_hash = str(current_data)
-
-            if current_hash != last_state_hash:
+            if str(current_data) != last_state_hash:
                 self.ui_cache = current_data
                 self.status_gw_text.set(gw_text)
                 self.status_node_text.set(node_text)
                 self.root.after(0, self.sync_ui)
-                last_state_hash = current_hash
+                last_state_hash = str(current_data)
 
-            if self.node_connected_flag:
-                time.sleep(3)
-            else:
-                time.sleep(1.5)
+            time.sleep(1.5 if not self.node_connected_flag else 3)
 
 if __name__ == "__main__":
     try:
