@@ -80,7 +80,7 @@ class StatusLight(tk.Canvas):
         self.itemconfig(self.indicator, fill=color)
 
 # ==========================================
-# 4. 日志组件 (带背景色)
+# 4. 日志组件
 # ==========================================
 class ModernLog(ttk.Frame):
     def __init__(self, parent, **kwargs):
@@ -89,7 +89,6 @@ class ModernLog(ttk.Frame):
         self.v_scroll = ttk.Scrollbar(self, orient="vertical")
         self.v_scroll.pack(side="right", fill="y")
         
-        # 修改点 1：设置浅灰色背景 (#f4f4f4)
         self.text = tk.Text(
             self, 
             yscrollcommand=self.v_scroll.set, 
@@ -99,17 +98,17 @@ class ModernLog(ttk.Frame):
             borderwidth=0, 
             highlightthickness=0, 
             takefocus=0, 
-            bg="#f4f4f4",  # <--- 浅灰色背景
-            fg="#333333",  # 深灰色文字
+            bg="#f4f4f4", 
+            fg="#333333",
             **kwargs
         )
         self.text.pack(side="left", fill="both", expand=True)
         self.v_scroll.config(command=self.text.yview)
         
         self.text.tag_config('INFO', foreground='')
-        self.text.tag_config('ERROR', foreground='#d32f2f') # 深红
-        self.text.tag_config('SUCCESS', foreground='#2e7d32') # 深绿
-        self.text.tag_config('CMD', foreground='#1565c0') # 深蓝
+        self.text.tag_config('ERROR', foreground='#d32f2f') 
+        self.text.tag_config('SUCCESS', foreground='#2e7d32') 
+        self.text.tag_config('CMD', foreground='#1565c0') 
 
     def insert(self, *args):
         try:
@@ -151,10 +150,8 @@ class ClawdLauncher:
         self.is_resizing = False
         self._resize_timer = None
 
-        # --- 字体定义 ---
         self.f_title = ("Microsoft YaHei UI", 12, "bold") 
         self.f_body = ("Microsoft YaHei UI", 11)          
-        # 统一的小字号，用于状态灯文字和托盘复选框
         self.f_small = ("Microsoft YaHei UI", 10)         
         self.f_emoji = ("Segoe UI Emoji", 14)
 
@@ -172,9 +169,18 @@ class ClawdLauncher:
         self.bottom_frame = ttk.Frame(root, padding=(25, 0, 25, 25))
         self.bottom_frame.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
 
-        # 日志标题 (恢复正常样式)
-        lbl_log = ttk.Label(self.bottom_frame, text="运行日志", font=("Microsoft YaHei UI", 10, "bold"))
-        lbl_log.pack(anchor="w", pady=(0, 5))
+        lbl_log = tk.Label(
+            self.bottom_frame, 
+            text=" 运行日志", 
+            font=("Microsoft YaHei UI", 10, "bold"), 
+            bg="#e0e0e0", 
+            fg="#333333", 
+            anchor="w", 
+            padx=10,
+            pady=6,
+            relief="flat"
+        )
+        lbl_log.pack(fill="x", pady=(0, 0))
         
         self.txt_system = ModernLog(self.bottom_frame)
 
@@ -195,17 +201,14 @@ class ClawdLauncher:
         style.configure("Accent.TButton", font=self.f_body)
         style.configure("TLabelframe.Label", font=self.f_small, foreground="#0078d4")
         
-        # 修改点 2：托盘复选框样式，显式指定字体为 self.f_small (10号)
         style.configure("Tray.TCheckbutton", font=self.f_small)
         
         style.configure("Title.TLabel", font=self.f_title)
-        
-        # 状态灯文字样式，同样使用 self.f_small
         style.configure("StatusGreen.TLabel", foreground="#2f9e44", font=self.f_small)
         style.configure("StatusRed.TLabel", foreground="gray", font=self.f_small)
         style.configure("StatusYellow.TLabel", foreground="#f59f00", font=self.f_small)
-        
         style.configure("Emoji.TLabel", font=self.f_emoji) 
+        
         style.configure("Stop.TButton", foreground="#d65745", font=self.f_body)
         style.configure("Link.TButton", foreground="#0078d4", font=self.f_body) 
 
@@ -232,7 +235,6 @@ class ClawdLauncher:
         self.lbl_node_state.grid(row=1, column=3, sticky="w", pady=8)
 
         # Settings
-        # 应用 Tray.TCheckbutton 样式，确保和状态文字一样大
         cb_tray = ttk.Checkbutton(
             frame, 
             text="最小化到托盘", 
@@ -379,7 +381,9 @@ class ClawdLauncher:
             daemon=True
         ).start()
 
+    # --- 核心修改：主动轮询启动逻辑，100% 解决启动失败 ---
     def start_services(self):
+        # 1. 检查是否已经运行
         if self.check_gateway_http():
             self.log(self.txt_system, "Gateway 服务已就绪。", "INFO")
             self.gateway_ready = True
@@ -389,17 +393,30 @@ class ClawdLauncher:
             self.log(self.txt_system, "Gateway 未运行，正在启动...", "INFO")
             
             cmd = "clawdbot gateway"
-            def gateway_trigger(line):
-                if "Listening on" in line or "Ctrl+C to stop" in line:
-                    self.log(self.txt_system, ">>> Gateway 启动成功 <<<", "SUCCESS")
-                    self.gateway_ready = True
-                    self.root.after(50, self._start_node_internal)
-
+            
+            # A. 启动 Gateway 进程
             threading.Thread(
                 target=self.run_process_in_background, 
-                args=(cmd, "proc_gateway", self.txt_system, gateway_trigger), 
+                args=(cmd, "proc_gateway", self.txt_system, None), # 这里不再传 callback
                 daemon=True
             ).start()
+
+            # B. 启动独立的“守望者”线程，主动轮询检测
+            def wait_for_gateway():
+                self.log(self.txt_system, "等待 Gateway 就绪...", "INFO")
+                # 尝试 30 次，每次 0.5 秒 = 15秒超时
+                for _ in range(30):
+                    time.sleep(0.5)
+                    if self.check_gateway_http():
+                        self.log(self.txt_system, ">>> Gateway 启动成功 (检测通过) <<<", "SUCCESS")
+                        self.gateway_ready = True
+                        # 回到主线程启动 Node
+                        self.root.after(50, self._start_node_internal)
+                        return
+                
+                self.log(self.txt_system, "❌ Gateway 启动超时，请检查日志。", "ERROR")
+
+            threading.Thread(target=wait_for_gateway, daemon=True).start()
 
     def stop_all(self, logging=True):
         if logging: self.log(self.txt_system, "正在停止所有服务...", "INFO")
