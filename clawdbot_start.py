@@ -83,6 +83,9 @@ class StatusLight(tk.Canvas):
 # ==========================================
 # 4. 日志组件 (高性能缓冲版)
 # ==========================================
+# ==========================================
+# 4. 日志组件 (修复：智能滚动 + 高性能缓冲)
+# ==========================================
 class ModernLog(ttk.Frame):
     def __init__(self, parent, **kwargs):
         super().__init__(parent)
@@ -114,10 +117,19 @@ class ModernLog(ttk.Frame):
 
     def insert(self, *args):
         try:
+            # [核心修复] 智能滚动判断
+            # yview() 返回 (top, bottom)，范围是 0.0 到 1.0
+            # 如果 bottom == 1.0，说明用户当前正看着最底部 -> 需要自动滚动
+            # 如果 bottom < 1.0，说明用户向上翻看历史日志 -> 不需要自动滚动
+            was_at_bottom = self.text.yview()[1] == 1.0
+
             self.text.config(state='normal')
             self.text.insert(*args)
             self.text.config(state='disabled')
-            self.text.see(tk.END)
+            
+            # 只有当用户原本就在最底部时，才自动跳转
+            if was_at_bottom:
+                self.text.see(tk.END)
         except: pass
     
     def see(self, *args):
