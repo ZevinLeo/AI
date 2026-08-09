@@ -1,3 +1,5 @@
+
+
 # 🦞 OpenClaw Manager
 
 **OpenClaw Manager** 是专为 [OpenClaw](https://openclaw.ai/) 设计的图形化管理工具，基于 Flutter 开发，提供一站式的安装、配置、监控和管理体验。
@@ -121,7 +123,7 @@ flutter build windows --release
 
 ## 📝 更新日志
 
-### v3.0.0 (当前版本)
+### v1.0.0 (当前版本)
 - 基于 Flutter 3.x 重构
 - 新增 Dashboard 三列布局
 - 新增消息渠道管理（支持 QQ Bot）
